@@ -17,8 +17,9 @@ use ML\IRI\IRI;
  *
  * @author Markus Lanthaler <mail@markus-lanthaler.com>
  */
-class FileGetContentsLoader implements DocumentLoaderInterface
+class FileGetContentsLoader extends DocumentLoader
 {
+
     /**
      * {@inheritdoc}
      */
@@ -48,7 +49,7 @@ class FileGetContentsLoader implements DocumentLoaderInterface
                     &$remoteDocument, &$http_response_header, &$httpHeadersOffset
                 ) {
                     if ($code === STREAM_NOTIFY_MIME_TYPE_IS) {
-                        $remoteDocument->mediaType = $msg;
+                        $remoteDocument->mediaType = $this->parseContentType($msg);
                     } elseif ($code === STREAM_NOTIFY_REDIRECTED) {
                         $remoteDocument->documentUrl = $msg;
                         $remoteDocument->mediaType = null;
@@ -79,13 +80,33 @@ class FileGetContentsLoader implements DocumentLoaderInterface
 
             $linkHeaderValues = $this->parseLinkHeaders($linkHeaderValues, new IRI($url));
 
-            $contextLinkHeaders = array_filter($linkHeaderValues, function ($link) {
-                return (isset($link['rel']) && in_array('http://www.w3.org/ns/json-ld#context', explode(' ', $link['rel'])));
-            });
+            // If we got a media type, we verify it
+            if ($remoteDocument->mediaType && !$this->verifyContentType($remoteDocument->mediaType)) {
+                // If the Media type was not as expected, check to see if the desired content type
+                // is being offered in a Link header (this is what schema.org now does).
+                $altLinkHeaders = array_filter($linkHeaderValues, function ($link) {
+                    return (isset($link['rel']) && isset($link['type']) 
+                        && ($link['rel'] === 'alternate') && ($link['type'] === 'application/ld+json'));
+                });
 
-            if (count($contextLinkHeaders) === 1) {
-                $remoteDocument->contextUrl = $contextLinkHeaders[0]['uri'];
-            } elseif (count($contextLinkHeaders) > 1) {
+                if (count($altLinkHeaders) && $altLinkHeaders[0]['uri']) {
+                    return $this->loadDocument($altLinkHeaders[0]['uri']);
+
+                } elseif (('application/json' !== $remoteDocument->mediaType) && 
+                    (0 !== substr_compare($remoteDocument->mediaType, '+json', -5))) {
+                    throw new JsonLdException(
+                        JsonLdException::LOADING_DOCUMENT_FAILED,
+                        'Invalid media type',
+                        $remoteDocument->mediaType
+                    );
+                }
+            }
+
+            $linkHeaderContextValues = $this->getLinkHeaderContextValues($linkHeaderValues);
+
+            if (count($linkHeaderContextValues) === 1) {
+                $remoteDocument->contextUrl = $linkHeaderContextValues[0]['uri'];
+            } elseif (count($linkHeaderContextValues) > 1) {
                 throw new JsonLdException(
                     JsonLdException::MULTIPLE_CONTEXT_LINK_HEADERS,
                     'Found multiple contexts in HTTP Link headers',
@@ -93,36 +114,8 @@ class FileGetContentsLoader implements DocumentLoaderInterface
                 );
             }
 
-            // If we got a media type, we verify it
-            if ($remoteDocument->mediaType) {
-                // Drop any media type parameters such as profiles
-                if (false !== ($pos = strpos($remoteDocument->mediaType, ';'))) {
-                    $remoteDocument->mediaType = substr($remoteDocument->mediaType, 0, $pos);
-                }
-
-                $remoteDocument->mediaType = trim($remoteDocument->mediaType);
-
-                if ('application/ld+json' === $remoteDocument->mediaType) {
-                    $remoteDocument->contextUrl = null;
-                } else {
-                    // If the Media type was not as expected, check to see if the desired content type
-                    // is being offered in a Link header (this is what schema.org now does).
-                    $altLinkHeaders = array_filter($linkHeaderValues, function ($link) {
-                        return (isset($link['rel']) && isset($link['type']) 
-                            && ($link['rel'] === 'alternate') && ($link['type'] === 'application/ld+json'));
-                    });
-
-                    if (count($altLinkHeaders) && $altLinkHeaders[0]['uri']) {
-                        return $this->loadDocument($altLinkHeaders[0]['uri']);
-                    } elseif (('application/json' !== $remoteDocument->mediaType) && 
-                        (0 !== substr_compare($remoteDocument->mediaType, '+json', -5))) {
-                        throw new JsonLdException(
-                            JsonLdException::LOADING_DOCUMENT_FAILED,
-                            'Invalid media type',
-                            $remoteDocument->mediaType
-                        );
-                    }
-                }
+            if ('application/ld+json' === $remoteDocument->mediaType) {
+                $remoteDocument->contextUrl = null;
             }
 
             $remoteDocument->document = Processor::parse($input);
@@ -133,41 +126,4 @@ class FileGetContentsLoader implements DocumentLoaderInterface
         return new RemoteDocument($url, Processor::parse($input));
     }
 
-    /**
-     * Attempts to retrieve any Link header being offered for application/ld+json content negotiation.
-     *
-     * @param  array  $headers  An array of HTTP Link headers
-     * @param  IRI  $baseIri The document's URL (used to expand relative URLs to absolutes)
-     * 
-     * @return array  $links  A structured array of Link header data
-     */
-    protected function parseLinkHeaders(array $headers, IRI $baseIri)
-    {
-        $links = array();
-
-        foreach ($headers as $header) { // Foreach individual Link header
-            foreach (explode(',', $header) as $value) { // Handle case of multiple links within a single Link header
-                if (preg_match("/<(.[^>]+)>;/", $value, $uri)) {
-                    $iri = new IRI(trim($uri[1]));
-
-                    $link = array('uri' => $iri->isAbsolute() ? (string) $iri : (string) $baseIri->resolve($iri));
-
-                    preg_match_all("/;\s?([A-z][^,=]+)=\"?(.[^\";]+)/", $value, $parameters);
-
-                    if (count($parameters) == 3) {
-                        $keys = $parameters[1];
-                        $values = $parameters[2];
-
-                        for ($i=0; $i < count($keys); $i++) {
-                            $link[trim($keys[$i])] = trim($values[$i]);
-                        }
-                    }
-
-                    $links[] = $link;
-                }
-            }
-        }
-
-        return $links;
-    }
 }
