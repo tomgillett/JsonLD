@@ -77,11 +77,15 @@ class FileGetContentsLoader implements DocumentLoaderInterface
                 }
             }
 
-            $linkHeaderValues = $this->parseContextLinkHeaders($linkHeaderValues, new IRI($url));
+            $linkHeaderValues = $this->parseLinkHeaders($linkHeaderValues, new IRI($url));
 
-            if (count($linkHeaderValues) === 1) {
-                $remoteDocument->contextUrl = reset($linkHeaderValues);
-            } elseif (count($linkHeaderValues) > 1) {
+            $contextLinkHeaders = array_filter($linkHeaderValues, function ($link) {
+                return (isset($link['rel']) && in_array('http://www.w3.org/ns/json-ld#context', explode(' ', $link['rel'])));
+            });
+
+            if (count($contextLinkHeaders) === 1) {
+                $remoteDocument->contextUrl = $contextLinkHeaders[0]['uri'];
+            } elseif (count($contextLinkHeaders) > 1) {
                 throw new JsonLdException(
                     JsonLdException::MULTIPLE_CONTEXT_LINK_HEADERS,
                     'Found multiple contexts in HTTP Link headers',
@@ -100,13 +104,24 @@ class FileGetContentsLoader implements DocumentLoaderInterface
 
                 if ('application/ld+json' === $remoteDocument->mediaType) {
                     $remoteDocument->contextUrl = null;
-                } elseif (('application/json' !== $remoteDocument->mediaType) &&
-                    (0 !== substr_compare($remoteDocument->mediaType, '+json', -5))) {
-                    throw new JsonLdException(
-                        JsonLdException::LOADING_DOCUMENT_FAILED,
-                        'Invalid media type',
-                        $remoteDocument->mediaType
-                    );
+                } else {
+                    // If the Media type was not as expected, check to see if the desired content type
+                    // is being offered in a Link header (this is what schema.org now does).
+                    $altLinkHeaders = array_filter($linkHeaderValues, function ($link) {
+                        return (isset($link['rel']) && isset($link['type']) 
+                            && ($link['rel'] === 'alternate') && ($link['type'] === 'application/ld+json'));
+                    });
+
+                    if (count($altLinkHeaders) && $altLinkHeaders[0]['uri']) {
+                        return $this->loadDocument($altLinkHeaders[0]['uri']);
+                    } elseif (('application/json' !== $remoteDocument->mediaType) && 
+                        (0 !== substr_compare($remoteDocument->mediaType, '+json', -5))) {
+                        throw new JsonLdException(
+                            JsonLdException::LOADING_DOCUMENT_FAILED,
+                            'Invalid media type',
+                            $remoteDocument->mediaType
+                        );
+                    }
                 }
             }
 
@@ -119,44 +134,40 @@ class FileGetContentsLoader implements DocumentLoaderInterface
     }
 
     /**
-     * Parse HTTP Link headers
+     * Attempts to retrieve any Link header being offered for application/ld+json content negotiation.
      *
-     * @param array $values  An array of HTTP Link header values
+     * @param  array  $headers  An array of HTTP Link headers
      * @param  IRI  $baseIri The document's URL (used to expand relative URLs to absolutes)
-     *
-     * @return array An array of parsed HTTP Link headers
+     * 
+     * @return array  $links  A structured array of Link header data
      */
-    private function parseContextLinkHeaders(array $values, IRI $baseIri)
+    public function parseLinkHeaders(array $headers, IRI $baseIri)
     {
-        // Separate multiple links contained in a single header value
-        for ($i = 0, $total = count($values); $i < $total; $i++) {
-            if (strpos($values[$i], ',') !== false) {
-                foreach (preg_split('/,(?=([^"]*"[^"]*")*[^"]*$)/', $values[$i]) as $v) {
-                    $values[] = trim($v);
+        $links = array();
+
+        foreach ($headers as $header) { // Foreach individual Link header
+            foreach (explode(',', $header) as $value) { // Handle case of multiple links within a single Link header
+                if (preg_match("/<(.[^>]+)>;/", $value, $uri)) {
+                    $iri = new IRI(trim($uri[1]));
+
+                    $link = array('uri' => $iri->isAbsolute() ? (string) $iri : (string) $baseIri->resolve($iri));
+
+                    preg_match_all("/;\s?([A-z][^,=]+)=\"?(.[^\";]+)/", $value, $parameters);
+
+                    if (count($parameters) == 3) {
+                        $keys = $parameters[1];
+                        $values = $parameters[2];
+
+                        for ($i=0; $i < count($keys); $i++) {
+                            $link[trim($keys[$i])] = trim($values[$i]);
+                        }
+                    }
+
+                    $links[] = $link;
                 }
-                unset($values[$i]);
             }
         }
 
-        $contexts = $matches = array();
-        $trimWhitespaceCallback = function ($str) {
-            return trim($str, "\"'  \n\t");
-        };
-
-        // Split the header in key-value pairs
-        foreach ($values as $val) {
-            $part = array();
-            foreach (preg_split('/;(?=([^"]*"[^"]*")*[^"]*$)/', $val) as $kvp) {
-                preg_match_all('/<[^>]+>|[^=]+/', $kvp, $matches);
-                $pieces = array_map($trimWhitespaceCallback, $matches[0]);
-                $part[$pieces[0]] = isset($pieces[1]) ? $pieces[1] : '';
-            }
-
-            if (in_array('http://www.w3.org/ns/json-ld#context', explode(' ', $part['rel']))) {
-                $contexts[] = (string) $baseIri->resolve(trim(key($part), '<> '));
-            }
-        }
-
-        return array_values(array_unique($contexts));
+        return $links;
     }
 }
