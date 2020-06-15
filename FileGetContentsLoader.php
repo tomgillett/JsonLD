@@ -114,8 +114,45 @@ class FileGetContentsLoader extends DocumentLoader
                 );
             }
 
-            if ('application/ld+json' === $remoteDocument->mediaType) {
-                $remoteDocument->contextUrl = null;
+            // If we got a media type, we verify it
+            if ($remoteDocument->mediaType) {
+                // Drop any media type parameters such as profiles
+                if (false !== ($pos = strpos($remoteDocument->mediaType, ';'))) {
+                    $remoteDocument->mediaType = substr($remoteDocument->mediaType, 0, $pos);
+                }
+
+                $remoteDocument->mediaType = trim($remoteDocument->mediaType);
+
+                if ('application/ld+json' === $remoteDocument->mediaType) {
+                    $remoteDocument->contextUrl = null;
+                } else {
+                    // If the Media type was not as expected, check to see if the desired content type
+                    // is being offered in a Link header (this is what schema.org now does).
+                    $altLinkHeaders = array_filter($linkHeaderValues, function ($link) {
+                        return (isset($link['rel']) && isset($link['type']) 
+                            && ($link['rel'] === 'alternate') && ($link['type'] === 'application/ld+json'));
+                    });
+
+                    // The spec states 'A response MUST NOT contain more than one HTTP Link Header
+                    // using the alternate link relation with type="application/ld+json"'
+                    if (count($altLinkHeaders) === 1) {
+                        return $this->loadDocument($altLinkHeaders[0]['uri']);
+                    } elseif(count($altLinkHeaders) > 1) {
+                        throw new JsonLdException(
+                            JsonLdException::LOADING_DOCUMENT_FAILED,
+                            'Received multiple alternate link headers'
+                        );
+                    } 
+
+                    if (('application/json' !== $remoteDocument->mediaType) && 
+                        (0 !== substr_compare($remoteDocument->mediaType, '+json', -5))) {
+                        throw new JsonLdException(
+                            JsonLdException::LOADING_DOCUMENT_FAILED,
+                            'Invalid media type',
+                            $remoteDocument->mediaType
+                        );
+                    }
+                }
             }
 
             $remoteDocument->document = Processor::parse($input);
@@ -125,5 +162,4 @@ class FileGetContentsLoader extends DocumentLoader
 
         return new RemoteDocument($url, Processor::parse($input));
     }
-
 }

@@ -26,7 +26,7 @@ class FileGetContentsLoaderTest extends \PHPUnit_Framework_TestCase
     {
         parent::setUp();
 
-        $this->iri = new IRI('https://www.google.com');
+        $this->iri = new IRI('https://www.foobar.com');
         $this->loader = new FileGetContentsLoader;
     }
 
@@ -40,36 +40,36 @@ class FileGetContentsLoaderTest extends \PHPUnit_Framework_TestCase
 
     public function testParseLinkHeadersExactsValues()
     {
-        $headers = [ 
-            '<https://www.google.com>; param1=foo; param2="bar";',
-        ];
+        $headers = array(
+            '<https://www.foobar.com>; param1=foo; param2="bar";',
+       );
 
         $parsed = $this->loader->parseLinkHeaders($headers, $this->iri);
 
-        $this->assertEquals('https://www.google.com', $parsed[0]['uri']);
+        $this->assertEquals('https://www.foobar.com', $parsed[0]['uri']);
         $this->assertEquals('foo', $parsed[0]['param1']);
         $this->assertEquals('bar', $parsed[0]['param2']);
     }
 
     public function testParseLinkHeadersTrimsValues()
     {
-        $headers = [ 
-            '< https://www.google.com  >; param1= foo ; param2=" bar ";',
-        ];
+        $headers = array(
+            '< https://www.foobar.com  >; param1= foo ; param2=" bar ";',
+       );
 
         $parsed = $this->loader->parseLinkHeaders($headers, $this->iri);
 
-        $this->assertEquals('https://www.google.com', $parsed[0]['uri']);
+        $this->assertEquals('https://www.foobar.com', $parsed[0]['uri']);
         $this->assertEquals('foo', $parsed[0]['param1']);
         $this->assertEquals('bar', $parsed[0]['param2']);
     }
 
     public function testParseLinkHeadersWithMultipleHeaders()
     {
-        $headers = [ 
-            '<https://www.google.com>; param1=foo; param2=bar;',
-            '<https://www.yahoo.com>; param1=fizz; param2=buzz;',
-        ];
+        $headers = array(
+            '<https://www.foobar.com>; param1=foo; param2=bar;',
+            '<https://www.fizzbuzz.net>; param1=fizz; param2=buzz;',
+       );
 
         $parsed = $this->loader->parseLinkHeaders($headers, $this->iri);
 
@@ -78,20 +78,20 @@ class FileGetContentsLoaderTest extends \PHPUnit_Framework_TestCase
 
     public function testParseLinkHeadersWithMultipleLinks()
     {
-        $headers = [ '<https://www.google.com>; param1=foo; param2=bar;, <https://www.yahoo.com>; param1=fizz; param2=buzz;' ];
+        $headers = array('<https://www.foobar.com>; param1=foo; param2=bar;, <https://www.fizzbuzz.net>; param1=fizz; param2=buzz;');
 
         $parsed = $this->loader->parseLinkHeaders($headers, $this->iri);
 
         $this->assertCount(2, $parsed);
-        $this->assertEquals('https://www.google.com', $parsed[0]['uri']);
-        $this->assertEquals('https://www.yahoo.com', $parsed[1]['uri']);
+        $this->assertEquals('https://www.foobar.com', $parsed[0]['uri']);
+        $this->assertEquals('https://www.fizzbuzz.net', $parsed[1]['uri']);
     }
 
     public function testParseLinkHeadersConvertsRelativeLinksToAbsolute()
     {
-        $headers = [ '</foo/bar>;' ];
+        $headers = array('</foo/bar>;');
         $parsed = $this->loader->parseLinkHeaders($headers, $this->iri);
-        $this->assertEquals('https://www.google.com/foo/bar', $parsed[0]['uri']);
+        $this->assertEquals('https://www.foobar.com/foo/bar', $parsed[0]['uri']);
     }
 
 }
